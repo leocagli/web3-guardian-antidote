@@ -45,6 +45,23 @@ export const TechnicalSection = () => {
     "✅ Upgradability: Proxy patterns seguros"
   ];
 
+  const contractCode = `contract AntidoteRegistry {
+    mapping(address => ThreatLevel) public addressRegistry;
+    mapping(bytes32 => ContractAudit) public contractAudits;
+    
+    function reportThreat(address target, bytes32 evidence) 
+        external onlyValidator returns (bool) {
+        require(validators[msg.sender].stake >= MINIMUM_STAKE);
+        threats[target].reports++;
+        
+        if (threats[target].reports >= CONSENSUS_THRESHOLD) {
+            addressRegistry[target] = ThreatLevel.HIGH;
+            emit ThreatConfirmed(target, block.timestamp);
+        }
+        return true;
+    }
+}`;
+
   return (
     <section id="tech" className="py-24 px-4 sm:px-6 lg:px-8 relative">
       <div className="max-w-7xl mx-auto">
@@ -89,22 +106,7 @@ export const TechnicalSection = () => {
           
           <div className="bg-slate-950 rounded-lg p-6 border border-slate-700/50 overflow-x-auto">
             <pre className="text-sm text-gray-300">
-              <code>{`contract AntidoteRegistry {
-    mapping(address => ThreatLevel) public addressRegistry;
-    mapping(bytes32 => ContractAudit) public contractAudits;
-    
-    function reportThreat(address target, bytes32 evidence) 
-        external onlyValidator returns (bool) {
-        require(validators[msg.sender].stake >= MINIMUM_STAKE);
-        threats[target].reports++;
-        
-        if (threats[target].reports >= CONSENSUS_THRESHOLD) {
-            addressRegistry[target] = ThreatLevel.HIGH;
-            emit ThreatConfirmed(target, block.timestamp);
-        }
-        return true;
-    }
-}`}</code>
+              <code>{contractCode}</code>
             </pre>
           </div>
         </div>
@@ -127,7 +129,7 @@ export const TechnicalSection = () => {
             <div className="bg-slate-800/50 rounded-xl p-6 border border-purple-500/30 text-center">
               <div className="text-3xl mb-3">⚡</div>
               <h4 className="font-bold text-purple-400 mb-2">Real-Time API</h4>
-              <p className="text-gray-300 text-sm">Respuestas en <100ms</p>
+              <p className="text-gray-300 text-sm">Respuestas en menos de 100ms</p>
             </div>
             <div className="bg-slate-800/50 rounded-xl p-6 border border-orange-500/30 text-center">
               <div className="text-3xl mb-3">🔌</div>
