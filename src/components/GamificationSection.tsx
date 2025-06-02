@@ -1,7 +1,7 @@
-
 import { Trophy, Target, Award, Users, Gamepad2, Star } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { GamesDemo } from "./GamesDemo";
 
 export const GamificationSection = () => {
   const achievements = [
@@ -121,6 +121,16 @@ export const GamificationSection = () => {
           </div>
         </div>
 
+        {/* Mini-Games Demo Section */}
+        <div className="bg-gradient-to-r from-purple-900/30 to-pink-900/30 rounded-2xl p-8 border border-purple-500/30 mb-16">
+          <h3 className="text-3xl font-bold text-white mb-8 text-center flex items-center justify-center">
+            <Gamepad2 className="h-8 w-8 mr-3 text-purple-400" />
+            Mini-Juegos Educativos - Demo Interactiva
+          </h3>
+          
+          <GamesDemo />
+        </div>
+
         {/* Levels & Achievements */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-16">
           {/* Levels */}
@@ -161,29 +171,6 @@ export const GamificationSection = () => {
                 </div>
               ))}
             </div>
-          </div>
-        </div>
-
-        {/* Mini-Games */}
-        <div className="bg-gradient-to-r from-purple-900/30 to-pink-900/30 rounded-2xl p-8 border border-purple-500/30 mb-16">
-          <h3 className="text-3xl font-bold text-white mb-8 text-center flex items-center justify-center">
-            <Gamepad2 className="h-8 w-8 mr-3 text-purple-400" />
-            Mini-Juegos Educativos
-          </h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {miniGames.map((game, index) => (
-              <div key={index} className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50 hover:border-purple-500/50 transition-all duration-300 hover:transform hover:scale-105">
-                <div className="text-4xl mb-4 text-center">{game.icon}</div>
-                <h4 className="text-lg font-bold text-white mb-2 text-center">{game.name}</h4>
-                <p className="text-gray-300 text-sm text-center mb-4">{game.description}</p>
-                <div className="text-center">
-                  <span className="bg-purple-500/20 text-purple-300 px-3 py-1 rounded-full text-sm font-semibold">
-                    {game.reward}
-                  </span>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
 
