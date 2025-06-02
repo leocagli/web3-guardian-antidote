@@ -44,133 +44,331 @@ export const TechnicalSection = () => {
     "✅ Upgradability: Proxy patterns seguros"
   ];
 
-  const contractCode = `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+  const contractCode = `#![cfg_attr(not(feature = "std"), no_std, no_main)]
 
-contract AntidoteRegistry {
-    // Estados de amenaza
-    enum ThreatLevel { SAFE, LOW, MEDIUM, HIGH, BLACKLISTED }
-    
-    // Estructura para reportes de amenazas
-    struct ThreatReport {
-        address reporter;
-        ThreatLevel level;
-        uint256 timestamp;
-        bytes32 evidenceHash;
-        uint256 confirmations;
-        bool verified;
+#[ink::contract]
+mod antidote_registry {
+    use ink::prelude::vec::Vec;
+    use ink::storage::Mapping;
+
+    /// Threat levels for addresses
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub enum ThreatLevel {
+        Safe,
+        Low,
+        Medium,
+        High,
+        Blacklisted,
     }
-    
-    // Mappings principales
-    mapping(address => ThreatLevel) public addressRegistry;
-    mapping(address => ThreatReport[]) public threatReports;
-    mapping(address => bool) public authorizedValidators;
-    mapping(address => uint256) public validatorStake;
-    
-    // Eventos
-    event ThreatReported(address indexed target, ThreatLevel level, address reporter);
-    event ThreatConfirmed(address indexed target, ThreatLevel level);
-    event ValidatorAdded(address indexed validator, uint256 stake);
-    
-    // Constantes
-    uint256 public constant MINIMUM_STAKE = 1 ether;
-    uint256 public constant CONSENSUS_THRESHOLD = 3;
-    
-    modifier onlyValidator() {
-        require(authorizedValidators[msg.sender], "No autorizado");
-        require(validatorStake[msg.sender] >= MINIMUM_STAKE, "Stake insuficiente");
-        _;
+
+    /// Threat report structure
+    #[derive(Debug, Clone, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub struct ThreatReport {
+        pub reporter: AccountId,
+        pub level: ThreatLevel,
+        pub timestamp: u64,
+        pub confirmations: u32,
+        pub verified: bool,
     }
-    
-    // Reportar nueva amenaza
-    function reportThreat(
-        address target,
-        ThreatLevel level,
-        bytes32 evidenceHash
-    ) external onlyValidator returns (bool) {
-        
-        ThreatReport memory newReport = ThreatReport({
-            reporter: msg.sender,
-            level: level,
-            timestamp: block.timestamp,
-            evidenceHash: evidenceHash,
-            confirmations: 1,
-            verified: false
-        });
-        
-        threatReports[target].push(newReport);
-        
-        // Auto-verificar si es de nivel alto
-        if (level >= ThreatLevel.HIGH) {
-            _updateThreatLevel(target, level);
+
+    /// Main contract storage
+    #[ink(storage)]
+    pub struct AntidoteRegistry {
+        /// Registry of threat levels for addresses
+        address_registry: Mapping<AccountId, ThreatLevel>,
+        /// Threat reports for each address
+        threat_reports: Mapping<AccountId, Vec<ThreatReport>>,
+        /// Authorized validators
+        authorized_validators: Mapping<AccountId, bool>,
+        /// Validator stakes
+        validator_stake: Mapping<AccountId, Balance>,
+        /// Contract owner
+        owner: AccountId,
+        /// Minimum stake required
+        minimum_stake: Balance,
+        /// Consensus threshold
+        consensus_threshold: u32,
+    }
+
+    /// Events emitted by the contract
+    #[ink(event)]
+    pub struct ThreatReported {
+        #[ink(topic)]
+        target: AccountId,
+        #[ink(topic)]
+        reporter: AccountId,
+        level: ThreatLevel,
+    }
+
+    #[ink(event)]
+    pub struct ThreatConfirmed {
+        #[ink(topic)]
+        target: AccountId,
+        level: ThreatLevel,
+    }
+
+    /// Contract errors
+    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode)]
+    #[cfg_attr(feature = "std", derive(scale_info::TypeInfo))]
+    pub enum Error {
+        NotAuthorized,
+        InsufficientStake,
+        NotOwner,
+        InvalidInput,
+    }
+
+    pub type Result<T> = core::result::Result<T, Error>;
+
+    impl AntidoteRegistry {
+        /// Constructor
+        #[ink(constructor)]
+        pub fn new() -> Self {
+            let caller = Self::env().caller();
+            let minimum_stake = 1_000_000_000_000; // 1 DOT in planck
+            
+            let mut authorized_validators = Mapping::default();
+            let mut validator_stake = Mapping::default();
+            
+            authorized_validators.insert(&caller, &true);
+            validator_stake.insert(&caller, &minimum_stake);
+
+            Self {
+                address_registry: Mapping::default(),
+                threat_reports: Mapping::default(),
+                authorized_validators,
+                validator_stake,
+                owner: caller,
+                minimum_stake,
+                consensus_threshold: 3,
+            }
         }
-        
-        emit ThreatReported(target, level, msg.sender);
-        return true;
-    }
-    
-    // Verificar direccion (funcion publica principal)
-    function checkAddress(address target) external view returns (
-        ThreatLevel level,
-        uint256 reportCount,
-        bool isVerified
-    ) {
-        return (
-            addressRegistry[target],
-            threatReports[target].length,
-            threatReports[target].length > 0 ? 
-                threatReports[target][threatReports[target].length - 1].verified : false
-        );
-    }
-    
-    // Analisis basico de patron de transacciones
-    function analyzeTransactionPattern(
-        address target,
-        uint256 txCount,
-        uint256 timeWindow
-    ) external view returns (bool suspicious) {
-        // Logica basica: muchas transacciones en poco tiempo = sospechoso
-        if (txCount > 100 && timeWindow < 3600) { // 100+ tx en 1 hora
-            return true;
+
+        /// Check if address is a validator with sufficient stake
+        fn is_authorized_validator(&self, validator: &AccountId) -> bool {
+            self.authorized_validators.get(validator).unwrap_or(false) &&
+            self.validator_stake.get(validator).unwrap_or(0) >= self.minimum_stake
         }
-        
-        // Verificar si ya esta en registry
-        if (addressRegistry[target] >= ThreatLevel.MEDIUM) {
-            return true;
+
+        /// Main function to check an address for threats
+        #[ink(message)]
+        pub fn check_address(&self, target: AccountId) -> (ThreatLevel, u32, bool) {
+            let level = self.address_registry.get(&target).unwrap_or(ThreatLevel::Safe);
+            let reports = self.threat_reports.get(&target).unwrap_or_default();
+            let report_count = reports.len() as u32;
+            let is_verified = if !reports.is_empty() {
+                reports.last().unwrap().verified
+            } else {
+                false
+            };
+            
+            (level, report_count, is_verified)
         }
-        
-        return false;
-    }
-    
-    // Funcion interna para actualizar nivel de amenaza
-    function _updateThreatLevel(address target, ThreatLevel level) internal {
-        addressRegistry[target] = level;
-        
-        // Marcar ultimo reporte como verificado
-        if (threatReports[target].length > 0) {
-            uint256 lastIndex = threatReports[target].length - 1;
-            threatReports[target][lastIndex].verified = true;
+
+        /// Report a threat for a specific address
+        #[ink(message)]
+        pub fn report_threat(
+            &mut self,
+            target: AccountId,
+            level: ThreatLevel,
+        ) -> Result<()> {
+            let caller = self.env().caller();
+            
+            if !self.is_authorized_validator(&caller) {
+                return Err(Error::NotAuthorized);
+            }
+
+            let timestamp = self.env().block_timestamp();
+            let new_report = ThreatReport {
+                reporter: caller,
+                level: level.clone(),
+                timestamp,
+                confirmations: 1,
+                verified: false,
+            };
+
+            let mut reports = self.threat_reports.get(&target).unwrap_or_default();
+            reports.push(new_report);
+            self.threat_reports.insert(&target, &reports);
+
+            // Auto-verify if high threat level
+            if matches!(level, ThreatLevel::High | ThreatLevel::Blacklisted) {
+                self.update_threat_level(target, level.clone());
+            }
+
+            self.env().emit_event(ThreatReported {
+                target,
+                reporter: caller,
+                level,
+            });
+
+            Ok(())
         }
-        
-        emit ThreatConfirmed(target, level);
+
+        /// Analyze transaction patterns (basic implementation)
+        #[ink(message)]
+        pub fn analyze_transaction_pattern(
+            &self,
+            target: AccountId,
+            tx_count: u32,
+            time_window: u64,
+        ) -> bool {
+            // Basic pattern: many transactions in short time = suspicious
+            if tx_count > 100 && time_window < 3600 {
+                return true;
+            }
+            
+            // Check if already flagged
+            let current_level = self.address_registry.get(&target).unwrap_or(ThreatLevel::Safe);
+            matches!(current_level, ThreatLevel::Medium | ThreatLevel::High | ThreatLevel::Blacklisted)
+        }
+
+        /// Update threat level for an address (internal)
+        fn update_threat_level(&mut self, target: AccountId, level: ThreatLevel) {
+            self.address_registry.insert(&target, &level);
+            
+            // Mark latest report as verified
+            if let Some(mut reports) = self.threat_reports.get(&target) {
+                if let Some(last_report) = reports.last_mut() {
+                    last_report.verified = true;
+                    self.threat_reports.insert(&target, &reports);
+                }
+            }
+
+            self.env().emit_event(ThreatConfirmed {
+                target,
+                level,
+            });
+        }
+
+        /// Add a new validator (only owner)
+        #[ink(message, payable)]
+        pub fn add_validator(&mut self, validator: AccountId) -> Result<()> {
+            let caller = self.env().caller();
+            if caller != self.owner {
+                return Err(Error::NotOwner);
+            }
+
+            let transferred = self.env().transferred_value();
+            if transferred < self.minimum_stake {
+                return Err(Error::InsufficientStake);
+            }
+
+            self.authorized_validators.insert(&validator, &true);
+            self.validator_stake.insert(&validator, &transferred);
+
+            Ok(())
+        }
+
+        /// Get threat reports for an address
+        #[ink(message)]
+        pub fn get_threat_reports(&self, target: AccountId) -> Vec<ThreatReport> {
+            self.threat_reports.get(&target).unwrap_or_default()
+        }
+
+        /// Get validator status
+        #[ink(message)]
+        pub fn is_validator(&self, validator: AccountId) -> bool {
+            self.is_authorized_validator(&validator)
+        }
+
+        /// Get minimum stake requirement
+        #[ink(message)]
+        pub fn get_minimum_stake(&self) -> Balance {
+            self.minimum_stake
+        }
     }
-    
-    // Agregar validator (solo owner)
-    function addValidator(address validator) external {
-        require(msg.sender == owner, "Solo owner");
-        authorizedValidators[validator] = true;
-        validatorStake[validator] = MINIMUM_STAKE;
-        emit ValidatorAdded(validator, MINIMUM_STAKE);
-    }
-    
-    address public owner;
-    
-    constructor() {
-        owner = msg.sender;
-        authorizedValidators[msg.sender] = true;
-        validatorStake[msg.sender] = MINIMUM_STAKE;
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[ink::test]
+        fn default_works() {
+            let antidote_registry = AntidoteRegistry::new();
+            let default_account = ink::env::test::default_accounts::<ink::env::DefaultEnvironment>().alice;
+            
+            assert!(antidote_registry.is_validator(default_account));
+        }
+
+        #[ink::test]
+        fn check_address_works() {
+            let antidote_registry = AntidoteRegistry::new();
+            let test_account = ink::env::test::default_accounts::<ink::env::DefaultEnvironment>().bob;
+            
+            let (level, count, verified) = antidote_registry.check_address(test_account);
+            assert_eq!(level, ThreatLevel::Safe);
+            assert_eq!(count, 0);
+            assert!(!verified);
+        }
     }
 }`;
+
+  const deploymentInstructions = `# Deployment en Polkadot Testnet (Rococo)
+
+## 1. Preparar el Entorno
+\`\`\`bash
+# Instalar Rust y cargo-contract
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup component add rust-src
+rustup target add wasm32-unknown-unknown
+
+# Instalar cargo-contract
+cargo install --force --locked cargo-contract --version 2.0.0-rc
+
+# Instalar substrate-contracts-node (para testing local)
+cargo install contracts-node --git https://github.com/paritytech/substrate-contracts-node.git
+\`\`\`
+
+## 2. Compilar el Contrato
+\`\`\`bash
+# Crear proyecto ink!
+cargo contract new antidote_registry
+cd antidote_registry
+
+# Reemplazar lib.rs con el código del contrato
+# Compilar
+cargo contract build --release
+
+# Generar metadata
+cargo contract build --release
+\`\`\`
+
+## 3. Deploy en Testnet
+\`\`\`bash
+# Usando Polkadot.js Apps (contracts.ui.substrate.io)
+# 1. Conectar a wss://rococo-contracts-rpc.polkadot.io
+# 2. Upload & Deploy el archivo .contract
+# 3. Configurar constructor con parámetros iniciales
+
+# O usando CLI
+cargo contract instantiate \\
+  --constructor new \\
+  --args \\
+  --suri //Alice \\
+  --url wss://rococo-contracts-rpc.polkadot.io
+\`\`\`
+
+## 4. Interacción con el Contrato
+\`\`\`javascript
+// Usando Polkadot.js API
+import { ApiPromise, WsProvider } from '@polkadot/api';
+import { ContractPromise } from '@polkadot/api-contract';
+
+const wsProvider = new WsProvider('wss://rococo-contracts-rpc.polkadot.io');
+const api = await ApiPromise.create({ provider: wsProvider });
+
+// Inicializar contrato
+const contract = new ContractPromise(api, metadata, contractAddress);
+
+// Verificar dirección
+const { result } = await contract.query.checkAddress(
+  alice.address,
+  { value: 0, gasLimit: -1 },
+  targetAddress
+);
+\`\`\``;
 
   return (
     <section id="tech" className="py-24 px-4 sm:px-6 lg:px-8 relative">
@@ -207,11 +405,11 @@ contract AntidoteRegistry {
           ))}
         </div>
 
-        {/* Smart Contract Code Preview */}
+        {/* Smart Contract Code Preview - Updated for Polkadot */}
         <div className="bg-slate-900/80 rounded-2xl p-8 border border-blue-500/30 mb-16">
           <h3 className="text-2xl font-bold text-white mb-6 flex items-center">
             <Code className="h-6 w-6 mr-2 text-blue-400" />
-            Smart Contract Optimizado (Funcional)
+            Smart Contract Optimizado (ink! - Polkadot Ready)
           </h3>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -223,37 +421,51 @@ contract AntidoteRegistry {
                 <li>• Análisis básico de patrones de transacción</li>
                 <li>• Prevención de wallet poisoning</li>
                 <li>• Registry inmutable de amenazas</li>
+                <li>• Compatible con Polkadot/Kusama</li>
               </ul>
             </div>
             <div className="bg-blue-900/20 rounded-lg p-4 border border-blue-500/30">
               <h4 className="text-blue-400 font-bold mb-2">🔍 Métodos Principales</h4>
               <ul className="text-gray-300 text-sm space-y-1">
-                <li>• <code>checkAddress()</code> - Verificar wallet</li>
-                <li>• <code>reportThreat()</code> - Reportar amenaza</li>
-                <li>• <code>analyzeTransactionPattern()</code> - Análisis</li>
-                <li>• <code>addValidator()</code> - Agregar validador</li>
+                <li>• <code>check_address()</code> - Verificar wallet</li>
+                <li>• <code>report_threat()</code> - Reportar amenaza</li>
+                <li>• <code>analyze_transaction_pattern()</code> - Análisis</li>
+                <li>• <code>add_validator()</code> - Agregar validador</li>
+                <li>• <code>get_threat_reports()</code> - Historial</li>
               </ul>
             </div>
           </div>
         
-          <div className="bg-slate-950 rounded-lg p-6 border border-slate-700/50 overflow-x-auto">
+          <div className="bg-slate-950 rounded-lg p-6 border border-slate-700/50 overflow-x-auto mb-6">
             <pre className="text-sm text-gray-300">
               <code>{contractCode}</code>
             </pre>
           </div>
+
+          {/* Deployment Instructions */}
+          <div className="bg-purple-900/20 rounded-lg p-6 border border-purple-500/30 mb-6">
+            <h4 className="text-purple-400 font-bold mb-4 flex items-center">
+              🚀 Instrucciones de Deploy en Polkadot Testnet
+            </h4>
+            <div className="bg-slate-950 rounded-lg p-4 overflow-x-auto">
+              <pre className="text-xs text-gray-300">
+                <code>{deploymentInstructions}</code>
+              </pre>
+            </div>
+          </div>
         
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-purple-900/20 rounded-lg p-4 border border-purple-500/30 text-center">
               <div className="text-purple-400 font-bold">Gas Optimizado</div>
-              <div className="text-gray-300 text-sm">~50K gas por verificación</div>
+              <div className="text-gray-300 text-sm">~2M weight units</div>
             </div>
             <div className="bg-cyan-900/20 rounded-lg p-4 border border-cyan-500/30 text-center">
               <div className="text-cyan-400 font-bold">Consenso Descentralizado</div>
               <div className="text-gray-300 text-sm">3+ validadores requeridos</div>
             </div>
             <div className="bg-orange-900/20 rounded-lg p-4 border border-orange-500/30 text-center">
-              <div className="text-orange-400 font-bold">Anti-Poisoning</div>
-              <div className="text-gray-300 text-sm">Detección automática</div>
+              <div className="text-orange-400 font-bold">Polkadot Native</div>
+              <div className="text-gray-300 text-sm">ink! Smart Contract</div>
             </div>
           </div>
         </div>
